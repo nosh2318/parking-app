@@ -1,0 +1,1037 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>駐車場管理</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Hiragino Sans',sans-serif;background:#0f172a;color:#f1f5f9;overflow-x:hidden}
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#334155;border-radius:4px}
+select{-webkit-appearance:none;appearance:none;background:#0f172a url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2394a3b8' d='M6 8L1 3h10z'/%3E%3C/svg%3E") no-repeat right 10px center;padding-right:30px}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
+.fade-in{animation:fadeIn .25s ease-out}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script>
+const e = React.createElement;
+const { useState, useMemo, useCallback, useEffect, useRef } = React;
+
+// ═══════════════════════════════════════════════════════════
+// localStorage 永続化
+// ═══════════════════════════════════════════════════════════
+const STORAGE_KEY = "parking-mgr-v1";
+function loadState(){
+  try{
+    const raw=localStorage.getItem(STORAGE_KEY);
+    if(!raw)return null;
+    return JSON.parse(raw);
+  }catch(e){return null}
+}
+function saveState(data){
+  try{localStorage.setItem(STORAGE_KEY,JSON.stringify(data))}catch(e){}
+}
+
+// ═══════════════════════════════════════════════════════════
+// マスターデータ
+// ═══════════════════════════════════════════════════════════
+
+const ALL_CARS = [
+  { id:"VEL-7673",   name:"VEL",  plate:"7673" },
+  { id:"NRH-5398",   name:"NRH",  plate:"5398" },
+  { id:"DLC-6057",   name:"DLC",  plate:"6057" },
+  { id:"RKY-299",    name:"RKY",  plate:"299"  },
+  { id:"CX3-4576",   name:"CX3",  plate:"4576" },
+  { id:"SLO-8529",   name:"SLO",  plate:"8529" },
+  { id:"AXL-8403",   name:"AXL",  plate:"8403" },
+  { id:"HRI-5512",   name:"HRI",  plate:"5512" },
+  { id:"CX5-8065",   name:"CX5",  plate:"8065" },
+  { id:"DLC-未登録", name:"DLC",  plate:"未登録" },
+];
+
+const INITIAL_SPOTS = [
+  { id:1, no:"221", key:179, carId:null, memo:"", restricted:null },
+  { id:2, no:"260", key:180, carId:null, memo:"", restricted:null },
+  { id:3, no:"234", key:181, carId:null, memo:"CX3/SLO/RKY 専用", restricted:["CX3-4576","SLO-8529","RKY-299"] },
+  { id:4, no:"172", key:169, carId:null, memo:"", restricted:null },
+  { id:5, no:"174", key:174, carId:null, memo:"", restricted:null },
+  { id:6, no:"200", key:175, carId:null, memo:"", restricted:null },
+  { id:7, no:"282", key:176, carId:null, memo:"", restricted:null },
+];
+// 専用枠に入庫可能な車両か判定
+function canParkInSpot(spot, carId) {
+  if (!spot.restricted) return true;
+  return spot.restricted.includes(carId);
+}
+
+function getCar(id){ return ALL_CARS.find(c=>c.id===id)||null; }
+function carLabel(c){ return c.name+" ("+c.plate+")"; }
+
+// ═══════════════════════════════════════════════════════════
+// App
+// ═══════════════════════════════════════════════════════════
+
+function App(){
+  const saved = useRef(loadState());
+  const s0 = saved.current;
+
+  const initWash = {};
+  ALL_CARS.forEach(c=>{initWash[c.id]="未洗車"});
+  const initWashTime = {};
+  ALL_CARS.forEach(c=>{initWashTime[c.id]=null});
+
+  const [spots, setSpots] = useState(s0?s0.spots:INITIAL_SPOTS);
+  const [tab, setTab] = useState("home");
+  const [selectedCar, setSelectedCar] = useState(null);
+  const [history, setHistory] = useState(s0?s0.history:[]);
+  const [modal, setModal] = useState(null);
+  const [washMap, setWashMap] = useState(s0?s0.washMap:initWash);
+  const [washTimeMap, setWashTimeMap] = useState(s0?s0.washTimeMap:initWashTime);
+  const [maintMap, setMaintMap] = useState(s0?s0.maintMap:{});
+
+  // localStorage に自動保存
+  useEffect(()=>{
+    saveState({spots,washMap,washTimeMap,maintMap,history,savedAt:new Date().toISOString()});
+  },[spots,washMap,washTimeMap,maintMap,history]);
+
+  const setWash = (carId,st)=>{
+    const now=new Date();
+    const stamp=String(now.getMonth()+1)+"/"+String(now.getDate())+" "+String(now.getHours()).padStart(2,"0")+":"+String(now.getMinutes()).padStart(2,"0");
+    setWashMap(p=>({...p,[carId]:st}));
+    setWashTimeMap(p=>({...p,[carId]:stamp}));
+    addLog("【洗車】"+carLabel(getCar(carId))+" → "+st);
+  };
+  const VENDORS = ["オートバックス","イエローハット","ディーラー","板金工場","タイヤ館","車検場","その他"];
+  const registerMaint = (carId, vendor, entryDate, pickupDate)=>{
+    setMaintMap(p=>({...p,[carId]:{vendor,entryDate,pickupDate}}));
+    const car=getCar(carId);
+    addLog("【メンテ入庫】"+carLabel(car)+" → "+vendor+" ("+entryDate+"〜"+pickupDate+")");
+  };
+  const clearMaint = (carId)=>{
+    setMaintMap(p=>{const n={...p};delete n[carId];return n});
+    const car=getCar(carId);
+    addLog("【メンテ回収】"+carLabel(car));
+  };
+
+  // ── データ共有機能 ──
+  const exportData=()=>{
+    const data={spots,washMap,washTimeMap,maintMap,history,exportedAt:new Date().toISOString()};
+    const json=JSON.stringify(data,null,2);
+    // クリップボードにコピー
+    if(navigator.clipboard){
+      navigator.clipboard.writeText(json).then(()=>alert("データをクリップボードにコピーしました！\nチームメンバーに共有してください。")).catch(()=>{
+        // fallback: ダウンロード
+        const blob=new Blob([json],{type:"application/json"});
+        const url=URL.createObjectURL(blob);
+        const a=document.createElement("a");a.href=url;a.download="parking-data-"+new Date().toISOString().slice(0,10)+".json";a.click();URL.revokeObjectURL(url);
+      });
+    }else{
+      const blob=new Blob([json],{type:"application/json"});
+      const url=URL.createObjectURL(blob);
+      const a=document.createElement("a");a.href=url;a.download="parking-data-"+new Date().toISOString().slice(0,10)+".json";a.click();URL.revokeObjectURL(url);
+    }
+  };
+  const importData=()=>{
+    const input=prompt("共有されたJSONデータを貼り付けてください:");
+    if(!input)return;
+    try{
+      const data=JSON.parse(input);
+      if(data.spots)setSpots(data.spots);
+      if(data.washMap)setWashMap(data.washMap);
+      if(data.washTimeMap)setWashTimeMap(data.washTimeMap);
+      if(data.maintMap)setMaintMap(data.maintMap);
+      if(data.history)setHistory(data.history);
+      alert("データをインポートしました！");
+    }catch(err){alert("データの読み込みに失敗しました。正しいJSON形式か確認してください。")}
+  };
+  const importFile=()=>{
+    const input=document.createElement("input");input.type="file";input.accept=".json";
+    input.onchange=ev=>{
+      const file=ev.target.files[0];if(!file)return;
+      const reader=new FileReader();
+      reader.onload=e2=>{
+        try{
+          const data=JSON.parse(e2.target.result);
+          if(data.spots)setSpots(data.spots);
+          if(data.washMap)setWashMap(data.washMap);
+          if(data.washTimeMap)setWashTimeMap(data.washTimeMap);
+          if(data.maintMap)setMaintMap(data.maintMap);
+          if(data.history)setHistory(data.history);
+          alert("ファイルからデータをインポートしました！");
+        }catch(err){alert("ファイルの読み込みに失敗しました。")}
+      };
+      reader.readAsText(file);
+    };
+    input.click();
+  };
+  const resetData=()=>{
+    if(!confirm("全データを初期化しますか？この操作は元に戻せません。"))return;
+    setSpots(INITIAL_SPOTS);
+    const iw={};ALL_CARS.forEach(c=>{iw[c.id]="未洗車"});setWashMap(iw);
+    const iwt={};ALL_CARS.forEach(c=>{iwt[c.id]=null});setWashTimeMap(iwt);
+    setMaintMap({});
+    setHistory([]);
+    localStorage.removeItem(STORAGE_KEY);
+    alert("データを初期化しました。");
+  };
+
+  // 計算
+  const parkedCarIds = useMemo(()=>spots.filter(s=>s.carId).map(s=>s.carId),[spots]);
+  const outCars = useMemo(()=>ALL_CARS.filter(c=>!parkedCarIds.includes(c.id)),[parkedCarIds]);
+  const occupied = parkedCarIds.length;
+  const empty = spots.length - occupied;
+  const minOut = ALL_CARS.length - spots.length; // 常に3台以上出庫が必要
+
+  const ts=()=>{const d=new Date();return String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0")};
+  const addLog=(msg)=>setHistory(h=>[...h,{time:ts(),msg}]);
+
+  // ── 入庫 ──
+  const parkCar=(spotId,carId)=>{
+    const sp=spots.find(s=>s.id===spotId);
+    const car=getCar(carId);
+    if(!sp||!car)return;
+    if(sp.carId){alert("この枠は使用中です");return;}
+    setSpots(p=>p.map(s=>s.id===spotId?{...s,carId}:s));
+    addLog("【入庫】"+carLabel(car)+" → No."+sp.no+" (Key:"+sp.key+")");
+    setModal(null);
+  };
+
+  // ── 出庫 ──
+  const releaseCar=(spotId)=>{
+    const sp=spots.find(s=>s.id===spotId);
+    if(!sp||!sp.carId)return;
+    const car=getCar(sp.carId);
+    setSpots(p=>p.map(s=>s.id===spotId?{...s,carId:null}:s));
+    addLog("【出庫】"+carLabel(car)+" ← No."+sp.no+" (Key:"+sp.key+")");
+    setModal(null);
+  };
+
+  // ── メモ更新 ──
+  const updateMemo=(spotId,memo)=>{
+    setSpots(p=>p.map(s=>s.id===spotId?{...s,memo}:s));
+  };
+
+  // ── 車両入替 ──
+  const swapCar=(spotId,newCarId)=>{
+    const sp=spots.find(s=>s.id===spotId);
+    if(!sp)return;
+    const oldCar=getCar(sp.carId);
+    const newCar=getCar(newCarId);
+    setSpots(p=>p.map(s=>s.id===spotId?{...s,carId:newCarId}:s));
+    addLog("【入替】No."+sp.no+": "+(oldCar?carLabel(oldCar):"空")+" → "+carLabel(newCar));
+    setModal(null);
+  };
+
+  // ── アラートレベル ──
+  const alertLv = empty===0?"critical":empty===1?"warning":"safe";
+
+  // ── 洗車ヘルパー（TOP・洗車タブ共通）──
+  const WASH_STATUSES = ["未洗車","内洗済","洗車済"];
+  const washStyle = s => ({
+    "未洗車":  {bg:"#7f1d1d",c:"#fca5a5",icon:"❌"},
+    "内洗済":  {bg:"#78350f",c:"#fcd34d",icon:"🧹"},
+    "洗車済":  {bg:"#065f46",c:"#6ee7b7",icon:"✨"},
+  }[s] || {bg:"#334155",c:"#94a3b8",icon:"?"});
+  const parkedCars = useMemo(()=>ALL_CARS.filter(c=>parkedCarIds.includes(c.id)),[parkedCarIds]);
+  const washCounts = useMemo(()=>{
+    const ct = {"未洗車":0,"内洗済":0,"洗車済":0};
+    parkedCars.forEach(c=>{const s=washMap[c.id];if(ct[s]!==undefined)ct[s]++});
+    return ct;
+  },[washMap,parkedCars]);
+
+  // ── メンテ計算（TOP・メンテタブ共通）──
+  const maintCars = useMemo(()=>outCars.filter(c=>maintMap[c.id]),[outCars,maintMap]);
+  const nonMaintOutCars = useMemo(()=>outCars.filter(c=>!maintMap[c.id]),[outCars,maintMap]);
+
+  // ═══════════════════════════════════════════════════════════
+  // ヘッダー
+  // ═══════════════════════════════════════════════════════════
+  const header = e("div",{style:{background:"linear-gradient(135deg,#1e3a5f 0%,#0f172a 100%)",padding:"16px 16px 12px",position:"sticky",top:0,zIndex:100,borderBottom:"1px solid #334155"}},
+    e("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"center"}},
+      e("div",null,
+        e("div",{style:{fontSize:17,fontWeight:800}},"🅿️ 駐車場管理"),
+        e("div",{style:{fontSize:11,color:"#94a3b8",marginTop:1}},
+          "駐車場"+spots.length+"枠 ／ 車両"+ALL_CARS.length+"台 ／ 出庫中"+outCars.length+"台"
+        )
+      ),
+      e("div",{style:{padding:"4px 10px",borderRadius:20,fontSize:11,fontWeight:700,
+        background:alertLv==="safe"?"#065f46":alertLv==="warning"?"#78350f":"#7f1d1d",
+        color:alertLv==="safe"?"#6ee7b7":alertLv==="warning"?"#fcd34d":"#fca5a5"}},
+        alertLv==="safe"?"空き"+empty+"枠":alertLv==="warning"?"⚠️ 残1枠":"🚨 満車"
+      )
+    ),
+
+    // ── ガイドバナー（一目でわかるやつ）──
+    e("div",{style:{marginTop:10,padding:"8px 12px",borderRadius:10,fontSize:12,lineHeight:1.6,
+      background:empty>1?"#0f172a":empty===1?"#78350f33":"#7f1d1d33",
+      border:"1px solid "+(empty>1?"#334155":empty===1?"#f59e0b44":"#ef444444")}},
+      empty>0
+        ? e(React.Fragment,null,
+            e("span",{style:{color:"#10b981",fontWeight:700}},"✅ 入庫OK"),
+            e("span",{style:{color:"#94a3b8"}}," ・空き"+empty+"枠あり"),
+            empty===1 && e("span",{style:{color:"#fcd34d"}}," ・次の返却前に出庫を！")
+          )
+        : e(React.Fragment,null,
+            e("span",{style:{color:"#fca5a5",fontWeight:700}},"🚨 満車 "),
+            e("span",{style:{color:"#fca5a5"}},"入庫するには先に1台出庫してください")
+          )
+    )
+  );
+
+  // ═══════════════════════════════════════════════════════════
+  // 🏠 TOPページ
+  // ═══════════════════════════════════════════════════════════
+
+  // 車両の現在ステータスを判定
+  const carStatus = useCallback((carId)=>{
+    const spot = spots.find(s=>s.carId===carId);
+    if(spot) return {type:"parked",spot,label:"🅿️ No."+spot.no,color:"#10b981"};
+    if(maintMap[carId]) return {type:"maint",maint:maintMap[carId],label:"🔧 "+maintMap[carId].vendor,color:"#f59e0b"};
+    return {type:"out",label:"🚙 出庫中",color:"#ef4444"};
+  },[spots,maintMap]);
+
+  // 選択した車両の入庫可能な駐車場を取得
+  const selectedCarSpots = useMemo(()=>{
+    if(!selectedCar) return [];
+    const st = carStatus(selectedCar);
+    if(st.type!=="out") return []; // 出庫中のみ入庫先を表示
+    return spots.filter(s=>!s.carId && canParkInSpot(s,selectedCar));
+  },[selectedCar,spots,carStatus]);
+
+  const homeTab = e(React.Fragment,null,
+    // ── サマリーカード ──
+    e("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:14}},
+      // 駐車場
+      e("div",{style:{background:"#1e293b",borderRadius:12,padding:"10px 8px",textAlign:"center",border:"1px solid #334155"}},
+        e("div",{style:{fontSize:16}},"🅿️"),
+        e("div",{style:{fontSize:18,fontWeight:800,color:empty===0?"#fca5a5":"#10b981"}},occupied+"/"+spots.length),
+        e("div",{style:{fontSize:9,color:"#64748b"}},"駐車中")
+      ),
+      // 洗車
+      e("div",{style:{background:"#1e293b",borderRadius:12,padding:"10px 8px",textAlign:"center",border:"1px solid #334155"}},
+        e("div",{style:{fontSize:16}},"🚿"),
+        e("div",{style:{fontSize:18,fontWeight:800,color:washCounts["未洗車"]>0?"#fca5a5":"#6ee7b7"}},washCounts["未洗車"]),
+        e("div",{style:{fontSize:9,color:"#64748b"}},"未洗車")
+      ),
+      // メンテ
+      e("div",{style:{background:"#1e293b",borderRadius:12,padding:"10px 8px",textAlign:"center",border:"1px solid #334155"}},
+        e("div",{style:{fontSize:16}},"🔧"),
+        e("div",{style:{fontSize:18,fontWeight:800,color:maintCars.length>0?"#fcd34d":"#94a3b8"}},maintCars.length),
+        e("div",{style:{fontSize:9,color:"#64748b"}},"メンテ中")
+      )
+    ),
+
+    // ── 車両一覧 ──
+    e("div",{style:{fontSize:13,fontWeight:700,marginBottom:10}},"🚗 車両を選んで入庫先を確認"),
+    ALL_CARS.map((c,i)=>{
+      const st = carStatus(c.id);
+      const ws = washMap[c.id];
+      const wst = washStyle(ws);
+      const maint = maintMap[c.id];
+      const isSelected = selectedCar===c.id;
+
+      return e("div",{key:c.id,className:"fade-in",style:{animationDelay:(i*30)+"ms"}},
+        // 車両カード
+        e("div",{onClick:()=>setSelectedCar(isSelected?null:c.id),style:{background:isSelected?"#1e3a5f":"#1e293b",borderRadius:isSelected?"12px 12px 0 0":12,marginBottom:isSelected?0:8,border:"1px solid "+(isSelected?"#3b82f6":"#334155"),borderLeft:"4px solid "+st.color,cursor:"pointer",overflow:"hidden",transition:"all .15s"}},
+          e("div",{style:{padding:"10px 12px",display:"flex",alignItems:"center",justifyContent:"space-between"}},
+            // 左: 車両名 + ステータスバッジ
+            e("div",{style:{display:"flex",alignItems:"center",gap:10}},
+              e("div",{style:{width:42,height:42,borderRadius:10,background:"#0f172a",border:"2px solid "+st.color,display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:800,color:st.color}},c.name.substring(0,3)),
+              e("div",null,
+                e("div",{style:{display:"flex",alignItems:"center",gap:6}},
+                  e("span",{style:{fontSize:14,fontWeight:700}},c.name),
+                  e("span",{style:{fontSize:11,color:"#64748b"}},c.plate)
+                ),
+                e("div",{style:{display:"flex",alignItems:"center",gap:6,marginTop:3}},
+                  // 現在地
+                  e("span",{style:{padding:"1px 8px",borderRadius:10,fontSize:9,fontWeight:600,background:st.color+"22",color:st.color}},st.label),
+                  // 洗車ステータス
+                  e("span",{style:{padding:"1px 8px",borderRadius:10,fontSize:9,fontWeight:600,background:wst.bg,color:wst.c}},wst.icon+" "+ws),
+                  // メンテ
+                  maint && e("span",{style:{padding:"1px 8px",borderRadius:10,fontSize:9,fontWeight:600,background:"#78350f33",color:"#fcd34d"}},"🔧")
+                )
+              )
+            ),
+            // 右: 展開矢印
+            e("span",{style:{fontSize:14,color:"#64748b",transform:isSelected?"rotate(180deg)":"rotate(0)",transition:"transform .2s"}},"▼")
+          )
+        ),
+
+        // ── 展開パネル ──
+        isSelected && e("div",{style:{background:"#0f172a",borderRadius:"0 0 12px 12px",border:"1px solid #3b82f6",borderTop:"none",padding:"12px",marginBottom:8}},
+
+          // 駐車中の場合 → 駐車場情報を表示
+          st.type==="parked" && e("div",null,
+            e("div",{style:{fontSize:12,fontWeight:700,color:"#10b981",marginBottom:8}},"✅ 駐車場 No."+st.spot.no+" に駐車中"),
+            e("div",{style:{background:"#1e293b",borderRadius:10,padding:12}},
+              e("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:6}},
+                e("span",{style:{fontSize:11,color:"#64748b"}},"駐車場No"),
+                e("span",{style:{fontSize:13,fontWeight:700}},st.spot.no)
+              ),
+              e("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:6}},
+                e("span",{style:{fontSize:11,color:"#64748b"}},"キーナンバー"),
+                e("span",{style:{fontSize:13,fontWeight:700}},"Key:"+st.spot.key)
+              ),
+              e("div",{style:{display:"flex",justifyContent:"space-between"}},
+                e("span",{style:{fontSize:11,color:"#64748b"}},"洗車"),
+                e("span",{style:{fontSize:12,fontWeight:600,color:wst.c}},wst.icon+" "+ws)
+              )
+            ),
+            e("button",{onClick:()=>setModal({type:"release",spotId:st.spot.id}),style:{width:"100%",marginTop:10,padding:"10px",borderRadius:8,border:"none",cursor:"pointer",fontSize:12,fontWeight:700,background:"#7f1d1d",color:"#fca5a5"}},"この車両を出庫する")
+          ),
+
+          // 出庫中の場合 → 入庫可能な駐車場リスト
+          st.type==="out" && e("div",null,
+            e("div",{style:{fontSize:12,fontWeight:700,color:"#60a5fa",marginBottom:8}},"📍 入庫先の駐車場:"),
+            selectedCarSpots.length>0
+              ? selectedCarSpots.map(sp=>
+                  e("button",{key:sp.id,onClick:()=>parkCar(sp.id,c.id),style:{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",padding:"10px 12px",borderRadius:10,border:"1px solid #334155",background:"#1e293b",color:"#f1f5f9",cursor:"pointer",fontSize:13,fontWeight:600,marginBottom:6}},
+                    e("div",{style:{display:"flex",alignItems:"center",gap:10}},
+                      e("div",{style:{width:40,height:36,borderRadius:8,background:"#065f4633",border:"2px solid #10b981",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}},
+                        e("div",{style:{fontSize:6,color:"#64748b",fontWeight:700}},"SPOT"),
+                        e("div",{style:{fontSize:13,fontWeight:800}},sp.no)
+                      ),
+                      e("div",null,
+                        e("div",{style:{fontSize:11,color:"#64748b"}},"Key:"+sp.key),
+                        sp.restricted && e("div",{style:{fontSize:9,color:"#a78bfa"}},"📌 専用枠")
+                      )
+                    ),
+                    e("span",{style:{fontSize:11,color:"#10b981",fontWeight:700}},"入庫 →")
+                  )
+                )
+              : e("div",{style:{padding:"10px 12px",borderRadius:10,background:"#7f1d1d33",border:"1px solid #ef444444",fontSize:12,color:"#fca5a5"}},
+                  empty===0?"🚨 満車のため入庫先がありません。先に1台出庫してください。":"この車両を入庫できる空き枠がありません（専用枠の制限）"
+                ),
+            // メンテ入庫ボタン
+            !maintMap[c.id] && e("button",{onClick:()=>setModal({type:"maint",carId:c.id}),style:{width:"100%",marginTop:8,padding:"10px",borderRadius:8,border:"1px solid #78350f",cursor:"pointer",fontSize:12,fontWeight:700,background:"#78350f33",color:"#fcd34d"}},"🔧 メンテナンスに入庫する")
+          ),
+
+          // メンテ中の場合
+          st.type==="maint" && e("div",null,
+            e("div",{style:{fontSize:12,fontWeight:700,color:"#f59e0b",marginBottom:8}},"🔧 メンテナンス中"),
+            e("div",{style:{background:"#1e293b",borderRadius:10,padding:12}},
+              e("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:6}},
+                e("span",{style:{fontSize:11,color:"#64748b"}},"業者"),
+                e("span",{style:{fontSize:13,fontWeight:700,color:"#fcd34d"}},maint.vendor)
+              ),
+              e("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:6}},
+                e("span",{style:{fontSize:11,color:"#64748b"}},"入庫日"),
+                e("span",{style:{fontSize:12}},maint.entryDate)
+              ),
+              e("div",{style:{display:"flex",justifyContent:"space-between"}},
+                e("span",{style:{fontSize:11,color:"#64748b"}},"回収予定日"),
+                e("span",{style:{fontSize:12}},maint.pickupDate)
+              )
+            ),
+            e("button",{onClick:()=>clearMaint(c.id),style:{width:"100%",marginTop:10,padding:"10px",borderRadius:8,border:"none",cursor:"pointer",fontSize:12,fontWeight:700,background:"#065f46",color:"#6ee7b7"}},"回収済にする")
+          )
+        )
+      );
+    }),
+
+    // ── 最近の操作履歴（直近5件） ──
+    e("div",{style:{marginTop:16,background:"#1e293b",borderRadius:12,border:"1px solid #334155",overflow:"hidden"}},
+      e("div",{style:{padding:"10px 14px",borderBottom:"1px solid #334155",display:"flex",justifyContent:"space-between",alignItems:"center"}},
+        e("div",{style:{fontSize:12,fontWeight:700}},"📋 最近の操作"),
+        history.length>5 && e("span",{style:{fontSize:10,color:"#64748b"}},"直近5件")
+      ),
+      history.length>0
+        ? e("div",{style:{padding:"6px 12px 10px"}},
+            history.slice().reverse().slice(0,5).map((h,i)=>
+              e("div",{key:i,style:{padding:"5px 0",fontSize:11,borderBottom:i<4?"1px solid #33415533":"none"}},
+                e("span",{style:{color:"#475569",marginRight:6}},h.time),
+                e("span",{style:{color:h.msg.includes("入庫")?"#6ee7b7":h.msg.includes("出庫")?"#fca5a5":"#93c5fd"}},h.msg)
+              )
+            )
+          )
+        : e("div",{style:{padding:"16px",textAlign:"center",fontSize:11,color:"#475569"}},"まだ操作履歴はありません")
+    )
+  );
+
+  // ═══════════════════════════════════════════════════════════
+  // 🅿️ 駐車場一覧タブ
+  // ═══════════════════════════════════════════════════════════
+  const spotsTab = e(React.Fragment,null,
+    spots.map((sp,idx)=>{
+      const car = sp.carId ? getCar(sp.carId) : null;
+      const isEmpty = !car;
+      const isRestricted = !!sp.restricted;
+      const borderC = isEmpty?(isRestricted?"#8b5cf6":"#334155"):"#10b981";
+
+      return e("div",{key:sp.id,className:"fade-in",style:{background:"#1e293b",borderRadius:14,marginBottom:10,border:"1px solid #334155",overflow:"hidden",borderLeft:"5px solid "+borderC,animationDelay:(idx*40)+"ms"}},
+
+        // ── メイン行 ──
+        e("div",{style:{padding:"12px 14px",display:"flex",alignItems:"center",justifyContent:"space-between"}},
+
+          // 左: 駐車場No + Key
+          e("div",{style:{display:"flex",alignItems:"center",gap:12}},
+            e("div",{style:{width:56,height:50,borderRadius:10,background:isEmpty?"#0f172a":"linear-gradient(135deg,#065f4666,#0f172a)",border:"2px solid "+(isEmpty?"#334155":"#10b981"),display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}},
+              e("div",{style:{fontSize:7,color:"#64748b",fontWeight:700,letterSpacing:1}},"SPOT"),
+              e("div",{style:{fontSize:18,fontWeight:800,color:isEmpty?"#475569":"#f1f5f9",lineHeight:1}},sp.no),
+              e("div",{style:{fontSize:8,color:"#64748b"}},"Key:"+sp.key)
+            ),
+            // 車両情報 or 空き
+            car
+              ? e("div",null,
+                  e("div",{style:{fontSize:15,fontWeight:700,color:"#f1f5f9"}},car.name,
+                    isRestricted && e("span",{style:{fontSize:9,color:"#a78bfa",marginLeft:6}},"📌専用枠")
+                  ),
+                  e("div",{style:{fontSize:12,color:"#64748b"}},car.plate)
+                )
+              : e("div",null,
+                  e("div",{style:{fontSize:13,color:"#475569",fontStyle:"italic"}},"— 空き —"),
+                  isRestricted && e("div",{style:{fontSize:9,color:"#a78bfa",marginTop:1}},"📌 "+sp.restricted.map(id=>{const c=getCar(id);return c?c.name:""}).join("/")+" 専用")
+                )
+          ),
+
+          // 右: アクションボタン
+          e("div",{style:{display:"flex",gap:6}},
+            car
+              ? e("button",{onClick:()=>setModal({type:"release",spotId:sp.id}),style:{padding:"8px 14px",borderRadius:8,border:"none",cursor:"pointer",fontSize:11,fontWeight:700,background:"#7f1d1d",color:"#fca5a5",transition:"all .15s"}},"出庫")
+              : e("button",{onClick:()=>setModal({type:"park",spotId:sp.id}),style:{padding:"8px 14px",borderRadius:8,border:"none",cursor:"pointer",fontSize:11,fontWeight:700,background:"#065f46",color:"#6ee7b7",transition:"all .15s"}},"入庫"),
+            e("button",{onClick:()=>setModal({type:"detail",spotId:sp.id}),style:{padding:"8px 10px",borderRadius:8,border:"1px solid #334155",cursor:"pointer",fontSize:11,fontWeight:600,background:"transparent",color:"#94a3b8"}},"詳細")
+          )
+        ),
+
+        // メモがある場合表示
+        sp.memo && e("div",{style:{padding:"0 14px 10px",fontSize:11,color:"#64748b"}},"📝 "+sp.memo)
+      );
+    }),
+
+    // ── 駐車場に入っていない車両セクション ──
+    e("div",{style:{marginTop:6,background:empty===0?"#7f1d1d":"#1e293b",borderRadius:14,border:"1px solid "+(empty===0?"#ef4444":"#334155"),overflow:"hidden",transition:"all .3s"}},
+      // ヘッダー
+      e("div",{style:{padding:"12px 14px",display:"flex",alignItems:"center",justifyContent:"space-between",borderBottom:outCars.length>0?"1px solid "+(empty===0?"#ef444444":"#334155"):"none"}},
+        e("div",{style:{display:"flex",alignItems:"center",gap:8}},
+          e("span",{style:{fontSize:18}},empty===0?"🚨":"🚙"),
+          e("div",null,
+            e("div",{style:{fontSize:14,fontWeight:700,color:empty===0?"#fca5a5":"#f1f5f9"}},
+              empty===0?"駐車できていない車両":"駐車場外の車両"
+            ),
+            e("div",{style:{fontSize:11,color:empty===0?"#fca5a5aa":"#64748b"}},
+              outCars.length+"台 ／ 全"+ALL_CARS.length+"台中"
+            )
+          )
+        ),
+        e("div",{style:{padding:"3px 10px",borderRadius:12,fontSize:11,fontWeight:700,
+          background:empty===0?"#ef4444":"#334155",
+          color:empty===0?"#fff":"#94a3b8"}},
+          empty===0?"満車":"空き"+empty+"枠"
+        )
+      ),
+      // 車両リスト
+      outCars.length>0 && e("div",{style:{padding:"6px 10px 10px"}},
+        outCars.map((c,i)=>
+          e("div",{key:c.id,style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 10px",borderRadius:10,marginBottom:4,background:empty===0?"#7f1d1d88":"#0f172a",border:"1px solid "+(empty===0?"#ef444433":"#33415544")}},
+            e("div",{style:{display:"flex",alignItems:"center",gap:8}},
+              e("span",{style:{fontSize:16}},empty===0?"⚠️":"🚙"),
+              e("div",null,
+                e("span",{style:{fontSize:13,fontWeight:700,color:empty===0?"#fca5a5":"#f1f5f9"}},c.name),
+                e("span",{style:{fontSize:11,color:empty===0?"#fca5a588":"#64748b",marginLeft:6}},c.plate)
+              )
+            ),
+            empty>0
+              ? e("button",{onClick:()=>setModal({type:"parkChoose",carId:c.id}),style:{padding:"5px 12px",borderRadius:6,border:"none",cursor:"pointer",fontSize:10,fontWeight:700,background:"#065f46",color:"#6ee7b7"}},"入庫 →")
+              : e("span",{style:{fontSize:10,color:"#fca5a5",fontWeight:600,animation:"pulse 1.5s infinite"}},"枠なし")
+          )
+        )
+      ),
+      // 満車時の対応ガイド
+      empty===0 && outCars.length>0 && e("div",{style:{padding:"0 14px 12px"}},
+        e("div",{style:{padding:"8px 12px",borderRadius:8,background:"#0f172a",fontSize:11,color:"#fca5a5",lineHeight:1.6}},
+          "💡 上記"+outCars.length+"台を入庫するには、先に駐車場から1台出庫してください。"
+        )
+      )
+    )
+  );
+
+  // ═══════════════════════════════════════════════════════════
+  // 🔧 メンテナンス入庫タブ
+  // ═══════════════════════════════════════════════════════════
+
+  // 日付プルダウン生成: 今日から30日分
+  const dateOptions = useMemo(()=>{
+    const opts=[];
+    const today=new Date();
+    for(let i=0;i<30;i++){
+      const d=new Date(today);d.setDate(today.getDate()+i);
+      const label=(d.getMonth()+1)+"/"+d.getDate()+"("+["日","月","火","水","木","金","土"][d.getDay()]+")";
+      const val=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+      opts.push({label,val});
+    }
+    return opts;
+  },[]);
+
+  const maintTab = e(React.Fragment,null,
+    // ガイド
+    e("div",{style:{background:"#1e293b",borderRadius:12,padding:14,border:"1px solid #334155",marginBottom:14}},
+      e("div",{style:{fontSize:13,fontWeight:700,marginBottom:6}},"🔧 メンテナンス入庫"),
+      e("div",{style:{fontSize:12,color:"#94a3b8",lineHeight:1.6}},
+        "業者にメンテナンス入庫中の車両を管理します。",e("br"),
+        "駐車場外の車両を業者に入庫登録できます。"
+      )
+    ),
+
+    // メンテ中の車両
+    maintCars.length>0 && e("div",{style:{marginBottom:14}},
+      e("div",{style:{fontSize:12,fontWeight:700,color:"#f59e0b",marginBottom:8}},"⚙️ メンテナンス中 "+maintCars.length+"台"),
+      maintCars.map((c,i)=>{
+        const m=maintMap[c.id];
+        return e("div",{key:c.id,className:"fade-in",style:{background:"#1e293b",borderRadius:12,marginBottom:8,border:"1px solid #334155",borderLeft:"4px solid #f59e0b",overflow:"hidden",animationDelay:(i*40)+"ms"}},
+          e("div",{style:{padding:"12px 14px"}},
+            e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}},
+              e("div",{style:{display:"flex",alignItems:"center",gap:10}},
+                e("span",{style:{fontSize:18}},"🔧"),
+                e("div",null,
+                  e("div",{style:{fontSize:15,fontWeight:700}},c.name),
+                  e("div",{style:{fontSize:12,color:"#64748b"}},c.plate)
+                )
+              ),
+              e("button",{onClick:()=>clearMaint(c.id),style:{padding:"6px 12px",borderRadius:8,border:"none",cursor:"pointer",fontSize:11,fontWeight:700,background:"#065f46",color:"#6ee7b7"}},"回収済")
+            ),
+            e("div",{style:{display:"flex",gap:8,flexWrap:"wrap"}},
+              e("div",{style:{padding:"4px 10px",borderRadius:8,background:"#78350f33",fontSize:11,color:"#fcd34d"}},"🏭 "+m.vendor),
+              e("div",{style:{padding:"4px 10px",borderRadius:8,background:"#0f172a",fontSize:11,color:"#94a3b8"}},"📅 入庫: "+m.entryDate),
+              e("div",{style:{padding:"4px 10px",borderRadius:8,background:"#0f172a",fontSize:11,color:"#94a3b8"}},"📅 回収: "+m.pickupDate)
+            )
+          )
+        );
+      })
+    ),
+
+    // 未登録の出庫中車両（メンテ登録可能）
+    nonMaintOutCars.length>0 && e("div",null,
+      e("div",{style:{fontSize:12,fontWeight:700,color:"#94a3b8",marginBottom:8}},"🚙 駐車場外の車両 "+nonMaintOutCars.length+"台"),
+      nonMaintOutCars.map((c,i)=>
+        e("div",{key:c.id,className:"fade-in",style:{background:"#1e293b",borderRadius:12,padding:"12px 14px",marginBottom:8,border:"1px solid #334155",borderLeft:"4px solid #475569",display:"flex",alignItems:"center",justifyContent:"space-between",animationDelay:(i*40)+"ms"}},
+          e("div",{style:{display:"flex",alignItems:"center",gap:10}},
+            e("span",{style:{fontSize:18}},"🚙"),
+            e("div",null,
+              e("div",{style:{fontSize:15,fontWeight:700}},c.name),
+              e("div",{style:{fontSize:12,color:"#64748b"}},c.plate)
+            )
+          ),
+          e("button",{onClick:()=>setModal({type:"maint",carId:c.id}),style:{padding:"8px 14px",borderRadius:8,border:"none",cursor:"pointer",fontSize:11,fontWeight:700,background:"#78350f",color:"#fcd34d"}},"メンテ入庫")
+        )
+      )
+    ),
+
+    // 全車両駐車中
+    outCars.length===0 && e("div",{style:{textAlign:"center",color:"#475569",padding:40}},"全車両が駐車場にあります")
+  );
+
+  // ═══════════════════════════════════════════════════════════
+  // 🚿 洗車タブ
+  // ═══════════════════════════════════════════════════════════
+
+  const washTab = e(React.Fragment,null,
+    // サマリー
+    e("div",{style:{display:"flex",gap:8,marginBottom:14}},
+      WASH_STATUSES.map(s=>{
+        const ws=washStyle(s);
+        return e("div",{key:s,style:{flex:1,background:"#1e293b",borderRadius:12,padding:"10px 6px",textAlign:"center",border:"1px solid #334155"}},
+          e("div",{style:{fontSize:18}},ws.icon),
+          e("div",{style:{fontSize:20,fontWeight:800,color:ws.c}},washCounts[s]),
+          e("div",{style:{fontSize:10,color:"#94a3b8"}},s)
+        );
+      })
+    ),
+
+    // 未洗車アラート
+    washCounts["未洗車"]>0 && e("div",{style:{background:"#7f1d1d",border:"1px solid #ef4444",borderRadius:10,padding:"8px 12px",marginBottom:14,display:"flex",alignItems:"center",gap:8}},
+      e("span",{style:{fontSize:16}},"⚠️"),
+      e("span",{style:{fontSize:12,color:"#fca5a5",fontWeight:600}},washCounts["未洗車"]+"台が未洗車です")
+    ),
+
+    // 車両リスト（駐車場にある車両のみ）
+    parkedCars.length===0 && e("div",{style:{textAlign:"center",color:"#475569",padding:30,fontSize:13}},"駐車場に車両がありません"),
+    parkedCars.map((c,i)=>{
+      const ws = washMap[c.id];
+      const wst = washStyle(ws);
+      const wTime = washTimeMap[c.id];
+      const spot = spots.find(s=>s.carId===c.id);
+
+      return e("div",{key:c.id,className:"fade-in",style:{background:"#1e293b",borderRadius:12,marginBottom:8,border:"1px solid #334155",overflow:"hidden",borderLeft:"4px solid "+wst.c,animationDelay:(i*30)+"ms"}},
+        e("div",{style:{padding:"10px 12px"}},
+          // 上段: 車両情報 + 現在の状態
+          e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}},
+            e("div",{style:{display:"flex",alignItems:"center",gap:10}},
+              e("span",{style:{fontSize:18}},wst.icon),
+              e("div",null,
+                e("span",{style:{fontSize:14,fontWeight:700}},c.name),
+                e("span",{style:{fontSize:11,color:"#64748b",marginLeft:6}},c.plate),
+                e("span",{style:{fontSize:10,color:"#475569",marginLeft:6}},"📍No."+(spot?spot.no:""))
+              )
+            ),
+            e("div",{style:{textAlign:"right"}},
+              e("span",{style:{display:"inline-block",padding:"2px 10px",borderRadius:12,fontSize:11,fontWeight:600,background:wst.bg,color:wst.c}},ws),
+              wTime
+                ? e("div",{style:{fontSize:9,color:"#64748b",marginTop:2}},"🕐 "+wTime)
+                : e("div",{style:{fontSize:9,color:"#475569",marginTop:2}},"未変更")
+            )
+          ),
+          // 下段: ステータス切替ボタン
+          e("div",{style:{display:"flex",gap:6}},
+            WASH_STATUSES.map(s=>{
+              const active = ws===s;
+              const sty = washStyle(s);
+              return e("button",{key:s,onClick:()=>{if(!active)setWash(c.id,s)},style:{flex:1,padding:"7px 0",borderRadius:8,border:"none",cursor:"pointer",fontSize:11,fontWeight:600,transition:"all .15s",background:active?sty.c+"33":"#0f172a",color:active?sty.c:"#475569",outline:active?"2px solid "+sty.c:"none"}},s);
+            })
+          )
+        )
+      );
+    })
+  );
+
+  // ═══════════════════════════════════════════════════════════
+  // 📋 履歴タブ
+  // ═══════════════════════════════════════════════════════════
+  const historyTab = e(React.Fragment,null,
+    e("div",{style:{fontSize:13,fontWeight:700,marginBottom:12}},"📋 操作履歴"),
+    history.length>0
+      ? e("div",null,history.slice().reverse().map((h,i)=>
+          e("div",{key:i,style:{background:"#1e293b",borderRadius:10,padding:"10px 14px",marginBottom:6,border:"1px solid #334155",fontSize:12}},
+            e("span",{style:{color:"#475569",marginRight:8}},h.time),
+            e("span",{style:{color:h.msg.includes("入庫")?"#6ee7b7":h.msg.includes("出庫")?"#fca5a5":"#93c5fd"}},h.msg)
+          )
+        ))
+      : e("div",{style:{textAlign:"center",color:"#475569",padding:40}},"まだ操作履歴はありません")
+  );
+
+  // ═══════════════════════════════════════════════════════════
+  // ⚙️ 設定タブ
+  // ═══════════════════════════════════════════════════════════
+  const savedAt = useMemo(()=>{
+    try{const d=loadState();return d&&d.savedAt?new Date(d.savedAt).toLocaleString("ja-JP"):"未保存";}catch(e){return "未保存"}
+  },[spots,washMap,maintMap,history]);
+
+  const btnStyle = (bg,c)=>({width:"100%",padding:"14px",borderRadius:12,border:"none",cursor:"pointer",fontSize:13,fontWeight:700,background:bg,color:c,marginBottom:8});
+
+  const settingsTab = e(React.Fragment,null,
+    e("div",{style:{fontSize:13,fontWeight:700,marginBottom:12}},"⚙️ 設定・データ管理"),
+
+    // 保存状態
+    e("div",{style:{background:"#1e293b",borderRadius:12,padding:14,border:"1px solid #334155",marginBottom:14}},
+      e("div",{style:{fontSize:12,fontWeight:700,marginBottom:8}},"💾 データ保存状態"),
+      e("div",{style:{fontSize:12,color:"#94a3b8",lineHeight:1.8}},
+        "データはこの端末のブラウザに自動保存されます。",e("br"),
+        "最終保存: ",e("span",{style:{color:"#6ee7b7",fontWeight:600}},savedAt)
+      )
+    ),
+
+    // データ共有
+    e("div",{style:{background:"#1e293b",borderRadius:12,padding:14,border:"1px solid #334155",marginBottom:14}},
+      e("div",{style:{fontSize:12,fontWeight:700,marginBottom:4}},"📤 データ共有（チーム同期）"),
+      e("div",{style:{fontSize:11,color:"#94a3b8",marginBottom:12,lineHeight:1.6}},
+        "エクスポートしたデータを他のメンバーに送り、",e("br"),
+        "インポートしてもらうことで最新状態を共有できます。"
+      ),
+      e("button",{onClick:exportData,style:btnStyle("#3b82f6","#fff")},"📋 データをコピー（クリップボード）"),
+      e("button",{onClick:()=>{
+        const data={spots,washMap,washTimeMap,maintMap,history,exportedAt:new Date().toISOString()};
+        const json=JSON.stringify(data,null,2);
+        const blob=new Blob([json],{type:"application/json"});
+        const url=URL.createObjectURL(blob);
+        const a=document.createElement("a");a.href=url;a.download="parking-data-"+new Date().toISOString().slice(0,10)+".json";a.click();URL.revokeObjectURL(url);
+      },style:btnStyle("#1e40af","#93c5fd")},"💾 JSONファイルでダウンロード"),
+      e("div",{style:{height:8}}),
+      e("button",{onClick:importData,style:btnStyle("#065f46","#6ee7b7")},"📥 データを貼り付けてインポート"),
+      e("button",{onClick:importFile,style:btnStyle("#064e3b","#6ee7b7")},"📂 JSONファイルからインポート")
+    ),
+
+    // デプロイ方法
+    e("div",{style:{background:"#1e293b",borderRadius:12,padding:14,border:"1px solid #334155",marginBottom:14}},
+      e("div",{style:{fontSize:12,fontWeight:700,marginBottom:8}},"🌐 チーム公開方法（GitHub Pages）"),
+      e("div",{style:{fontSize:11,color:"#94a3b8",lineHeight:1.8}},
+        "① GitHubでリポジトリを作成",e("br"),
+        "② このHTMLファイルを index.html としてアップロード",e("br"),
+        "③ Settings → Pages → Branch: main → Save",e("br"),
+        "④ 数分後に https://ユーザー名.github.io/リポジトリ名/ でアクセス可能",e("br"),e("br"),
+        "チーム全員がこのURLにアクセスしてアプリを使えます。",e("br"),
+        e("span",{style:{color:"#fcd34d"}},"※ データ共有は「エクスポート→インポート」で行ってください。")
+      )
+    ),
+
+    // リセット
+    e("div",{style:{background:"#1e293b",borderRadius:12,padding:14,border:"1px solid #ef444433"}},
+      e("div",{style:{fontSize:12,fontWeight:700,marginBottom:8,color:"#fca5a5"}},"⚠️ データリセット"),
+      e("div",{style:{fontSize:11,color:"#94a3b8",marginBottom:12}},"全データを初期状態に戻します。この操作は元に戻せません。"),
+      e("button",{onClick:resetData,style:btnStyle("#7f1d1d","#fca5a5")},"🗑️ 全データを初期化")
+    )
+  );
+
+  // ═══════════════════════════════════════════════════════════
+  // モーダル
+  // ═══════════════════════════════════════════════════════════
+  let modalEl = null;
+  if(modal){
+    const sp = spots.find(s=>s.id===modal.spotId);
+    const overlay = {position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,.7)",zIndex:200,display:"flex",alignItems:"flex-end",justifyContent:"center"};
+    const sheet = {width:"100%",maxWidth:480,background:"#1e293b",borderRadius:"20px 20px 0 0",padding:"20px 16px env(safe-area-inset-bottom, 20px)",maxHeight:"80vh",overflowY:"auto"};
+    const closeBtn = e("button",{onClick:()=>setModal(null),style:{position:"absolute",top:16,right:16,background:"#334155",border:"none",borderRadius:"50%",width:30,height:30,color:"#94a3b8",fontSize:16,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}},"✕");
+
+    // ── 入庫モーダル ──
+    if(modal.type==="park" && sp){
+      const available = outCars.filter(c=>canParkInSpot(sp,c.id));
+      const blocked = sp.restricted ? outCars.filter(c=>!canParkInSpot(sp,c.id)) : [];
+      modalEl = e("div",{onClick:ev=>{if(ev.target===ev.currentTarget)setModal(null)},style:overlay},
+        e("div",{className:"fade-in",style:{...sheet,position:"relative"}},
+          closeBtn,
+          e("div",{style:{fontSize:16,fontWeight:800,marginBottom:4}},"🅿️ No."+sp.no+" に入庫"),
+          e("div",{style:{fontSize:12,color:"#64748b",marginBottom:sp.restricted?8:16}},"キーナンバー: "+sp.key),
+          sp.restricted && e("div",{style:{padding:"6px 10px",borderRadius:8,background:"#8b5cf622",border:"1px solid #8b5cf644",marginBottom:14,fontSize:11,color:"#a78bfa",fontWeight:600}},
+            "📌 この枠は "+sp.restricted.map(id=>{const c=getCar(id);return c?c.name:""}).join(" / ")+" 専用です"
+          ),
+
+          available.length>0
+            ? e(React.Fragment,null,
+                e("div",{style:{fontSize:12,color:"#94a3b8",marginBottom:10}},"入庫する車両を選んでください:"),
+                available.map(c=>
+                  e("button",{key:c.id,onClick:()=>parkCar(sp.id,c.id),style:{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",padding:"14px 16px",borderRadius:12,border:"1px solid #334155",background:"#0f172a",color:"#f1f5f9",cursor:"pointer",fontSize:14,fontWeight:600,marginBottom:8,transition:"border-color .15s"}},
+                    e("div",{style:{display:"flex",alignItems:"center",gap:10}},
+                      e("span",{style:{fontSize:20}},"🚗"),
+                      e("div",{style:{textAlign:"left"}},
+                        e("div",null,c.name),
+                        e("div",{style:{fontSize:11,color:"#64748b",fontWeight:400}},c.plate)
+                      )
+                    ),
+                    e("span",{style:{fontSize:12,color:"#10b981",fontWeight:700}},"入庫 →")
+                  )
+                )
+              )
+            : e("div",{style:{textAlign:"center",padding:30,color:"#475569"}},"入庫可能な車両がありません")
+        )
+      );
+    }
+
+    // ── 出庫確認モーダル ──
+    if(modal.type==="release" && sp){
+      const car = getCar(sp.carId);
+      modalEl = e("div",{onClick:ev=>{if(ev.target===ev.currentTarget)setModal(null)},style:overlay},
+        e("div",{className:"fade-in",style:{...sheet,position:"relative"}},
+          closeBtn,
+          e("div",{style:{fontSize:16,fontWeight:800,marginBottom:14}},"🚙 出庫確認"),
+
+          // ガイド: やるべきこと
+          e("div",{style:{background:"#0f172a",borderRadius:14,padding:16,marginBottom:16}},
+            e("div",{style:{fontSize:12,color:"#94a3b8",marginBottom:10,fontWeight:700}},"📋 やること:"),
+            e("div",{style:{fontSize:13,lineHeight:2}},
+              e("div",null,"① キーボックス ",e("b",{style:{color:"#60a5fa"}},"Key:"+sp.key)," からキーを取る"),
+              e("div",null,"② 駐車場 ",e("b",{style:{color:"#60a5fa"}},"No."+sp.no)," の車両を出す"),
+              car && e("div",null,"③ 車両: ",e("b",{style:{color:"#f1f5f9"}},carLabel(car)))
+            )
+          ),
+
+          e("div",{style:{display:"flex",gap:10}},
+            e("button",{onClick:()=>setModal(null),style:{flex:1,padding:"14px",borderRadius:12,border:"1px solid #334155",background:"transparent",color:"#94a3b8",fontSize:14,fontWeight:600,cursor:"pointer"}},"キャンセル"),
+            e("button",{onClick:()=>releaseCar(sp.id),style:{flex:1,padding:"14px",borderRadius:12,border:"none",background:"#ef4444",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer"}},"出庫完了")
+          )
+        )
+      );
+    }
+
+    // ── 出庫中から入庫先を選ぶモーダル ──
+    if(modal.type==="parkChoose"){
+      const car = getCar(modal.carId);
+      const freeSpots = spots.filter(s=>!s.carId);
+      const allowedSpots = freeSpots.filter(s=>canParkInSpot(s,modal.carId));
+      const blockedSpots = freeSpots.filter(s=>!canParkInSpot(s,modal.carId));
+      modalEl = e("div",{onClick:ev=>{if(ev.target===ev.currentTarget)setModal(null)},style:overlay},
+        e("div",{className:"fade-in",style:{...sheet,position:"relative"}},
+          closeBtn,
+          e("div",{style:{fontSize:16,fontWeight:800,marginBottom:4}},"🚗 "+carLabel(car)+" を入庫"),
+          e("div",{style:{fontSize:12,color:"#64748b",marginBottom:16}},"入庫先の駐車場を選んでください:"),
+
+          allowedSpots.map(sp=>
+            e("button",{key:sp.id,onClick:()=>parkCar(sp.id,modal.carId),style:{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",padding:"14px 16px",borderRadius:12,border:"1px solid #334155",background:"#0f172a",color:"#f1f5f9",cursor:"pointer",fontSize:14,fontWeight:600,marginBottom:8}},
+              e("div",{style:{display:"flex",alignItems:"center",gap:10}},
+                e("div",{style:{width:44,height:40,borderRadius:8,background:"#065f4633",border:"2px solid #10b981",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}},
+                  e("div",{style:{fontSize:7,color:"#64748b",fontWeight:700}},"SPOT"),
+                  e("div",{style:{fontSize:14,fontWeight:800}},sp.no)
+                ),
+                e("div",{style:{textAlign:"left"}},
+                  e("div",{style:{fontSize:12,color:"#64748b"}},"Key: "+sp.key),
+                  sp.restricted && e("div",{style:{fontSize:9,color:"#a78bfa"}},"📌 専用枠")
+                )
+              ),
+              e("div",{style:{textAlign:"right"}},
+                e("div",{style:{fontSize:12,color:"#10b981",fontWeight:700}},"ここに入庫"),
+                e("div",{style:{fontSize:10,color:"#64748b"}},"Key:"+sp.key+"を使用")
+              )
+            )
+          ),
+
+          // 専用枠のため入庫不可の枠
+          blockedSpots.length>0 && e("div",{style:{marginTop:4}},
+            blockedSpots.map(sp=>
+              e("div",{key:sp.id,style:{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",padding:"12px 16px",borderRadius:12,border:"1px solid #33415544",background:"#0f172a44",marginBottom:6,opacity:.5}},
+                e("div",{style:{display:"flex",alignItems:"center",gap:10}},
+                  e("div",{style:{width:44,height:40,borderRadius:8,background:"#33415533",border:"2px solid #334155",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}},
+                    e("div",{style:{fontSize:7,color:"#475569",fontWeight:700}},"SPOT"),
+                    e("div",{style:{fontSize:14,fontWeight:800,color:"#475569"}},sp.no)
+                  ),
+                  e("div",{style:{fontSize:11,color:"#475569"}},"Key: "+sp.key)
+                ),
+                e("div",{style:{fontSize:10,color:"#a78bfa"}},"📌 "+sp.restricted.map(id=>{const c=getCar(id);return c?c.name:""}).join("/")+" 専用")
+              )
+            )
+          ),
+
+          allowedSpots.length===0 && e("div",{style:{textAlign:"center",padding:20,color:"#fca5a5",fontSize:13}},"この車両を入庫できる空き枠がありません")
+        )
+      );
+    }
+
+    // ── メンテナンス入庫モーダル ──
+    if(modal.type==="maint"){
+      const car = getCar(modal.carId);
+      const todayVal = dateOptions[0].val;
+      const weekLaterVal = dateOptions.length>7?dateOptions[7].val:dateOptions[dateOptions.length-1].val;
+      modalEl = e("div",{onClick:ev=>{if(ev.target===ev.currentTarget)setModal(null)},style:overlay},
+        e("div",{className:"fade-in",style:{...sheet,position:"relative"}},
+          closeBtn,
+          e("div",{style:{fontSize:16,fontWeight:800,marginBottom:4}},"🔧 メンテナンス入庫"),
+          e("div",{style:{fontSize:12,color:"#64748b",marginBottom:16}},car?carLabel(car):""),
+
+          // 業者選定
+          e("div",{style:{marginBottom:14}},
+            e("div",{style:{fontSize:12,color:"#94a3b8",marginBottom:6,fontWeight:600}},"🏭 業者選定"),
+            e("select",{id:"maint-vendor",defaultValue:VENDORS[0],style:{width:"100%",padding:"12px",borderRadius:10,border:"1px solid #334155",background:"#0f172a",color:"#f1f5f9",fontSize:14,outline:"none"}},
+              VENDORS.map(v=>e("option",{key:v,value:v},v))
+            )
+          ),
+
+          // 入庫日
+          e("div",{style:{marginBottom:14}},
+            e("div",{style:{fontSize:12,color:"#94a3b8",marginBottom:6,fontWeight:600}},"📅 入庫日"),
+            e("select",{id:"maint-entry",defaultValue:todayVal,style:{width:"100%",padding:"12px",borderRadius:10,border:"1px solid #334155",background:"#0f172a",color:"#f1f5f9",fontSize:14,outline:"none"}},
+              dateOptions.map(d=>e("option",{key:d.val,value:d.val},d.label))
+            )
+          ),
+
+          // 回収日
+          e("div",{style:{marginBottom:16}},
+            e("div",{style:{fontSize:12,color:"#94a3b8",marginBottom:6,fontWeight:600}},"📅 回収予定日"),
+            e("select",{id:"maint-pickup",defaultValue:weekLaterVal,style:{width:"100%",padding:"12px",borderRadius:10,border:"1px solid #334155",background:"#0f172a",color:"#f1f5f9",fontSize:14,outline:"none"}},
+              dateOptions.map(d=>e("option",{key:d.val,value:d.val},d.label))
+            )
+          ),
+
+          e("div",{style:{display:"flex",gap:10}},
+            e("button",{onClick:()=>setModal(null),style:{flex:1,padding:"14px",borderRadius:12,border:"1px solid #334155",background:"transparent",color:"#94a3b8",fontSize:14,fontWeight:600,cursor:"pointer"}},"キャンセル"),
+            e("button",{onClick:()=>{
+              const vendor=document.getElementById("maint-vendor").value;
+              const entry=document.getElementById("maint-entry");
+              const pickup=document.getElementById("maint-pickup");
+              const entryLabel=entry.options[entry.selectedIndex].text;
+              const pickupLabel=pickup.options[pickup.selectedIndex].text;
+              registerMaint(modal.carId,vendor,entryLabel,pickupLabel);
+              setModal(null);
+            },style:{flex:1,padding:"14px",borderRadius:12,border:"none",background:"#f59e0b",color:"#000",fontSize:14,fontWeight:700,cursor:"pointer"}},"登録")
+          )
+        )
+      );
+    }
+
+    // ── 詳細モーダル ──
+    if(modal.type==="detail" && sp){
+      const car = sp.carId ? getCar(sp.carId) : null;
+      modalEl = e("div",{onClick:ev=>{if(ev.target===ev.currentTarget)setModal(null)},style:overlay},
+        e("div",{className:"fade-in",style:{...sheet,position:"relative"}},
+          closeBtn,
+          e("div",{style:{fontSize:16,fontWeight:800,marginBottom:14}},"🅿️ No."+sp.no+" 詳細"),
+
+          // 駐車場情報
+          e("div",{style:{background:"#0f172a",borderRadius:12,padding:14,marginBottom:14}},
+            e("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:8}},
+              e("span",{style:{fontSize:12,color:"#64748b"}},"駐車場No"),
+              e("span",{style:{fontSize:14,fontWeight:700}},sp.no)
+            ),
+            e("div",{style:{display:"flex",justifyContent:"space-between",marginBottom:8}},
+              e("span",{style:{fontSize:12,color:"#64748b"}},"キーナンバー"),
+              e("span",{style:{fontSize:14,fontWeight:700}},sp.key)
+            ),
+            e("div",{style:{display:"flex",justifyContent:"space-between"}},
+              e("span",{style:{fontSize:12,color:"#64748b"}},"状態"),
+              car
+                ? e("span",{style:{fontSize:14,fontWeight:700,color:"#10b981"}},"使用中: "+carLabel(car))
+                : e("span",{style:{fontSize:14,color:"#475569"}},"空き")
+            )
+          ),
+
+          // 専用枠表示
+          sp.restricted && e("div",{style:{padding:"6px 10px",borderRadius:8,background:"#8b5cf622",border:"1px solid #8b5cf644",marginBottom:14,fontSize:11,color:"#a78bfa",fontWeight:600}},
+            "📌 専用枠: "+sp.restricted.map(id=>{const c=getCar(id);return c?c.name:""}).join(" / ")
+          ),
+
+          // 車両入替（使用中の場合）
+          car && e("div",{style:{marginBottom:14}},
+            e("div",{style:{fontSize:12,color:"#64748b",marginBottom:6,fontWeight:600}},"🔄 車両入替"),
+            e("select",{value:sp.carId,onChange:ev=>{if(ev.target.value!==sp.carId)swapCar(sp.id,ev.target.value)},style:{width:"100%",padding:"10px 12px",borderRadius:8,border:"1px solid #334155",background:"#0f172a",color:"#f1f5f9",fontSize:13,outline:"none"}},
+              e("option",{value:sp.carId},carLabel(car)+" (現在)"),
+              outCars.filter(c=>canParkInSpot(sp,c.id)).map(c=>e("option",{key:c.id,value:c.id},carLabel(c)))
+            )
+          ),
+
+          // メモ
+          e("div",{style:{marginBottom:14}},
+            e("div",{style:{fontSize:12,color:"#64748b",marginBottom:6,fontWeight:600}},"📝 メモ"),
+            e("textarea",{value:sp.memo,onChange:ev=>updateMemo(sp.id,ev.target.value),placeholder:"この駐車枠に関するメモ...",rows:3,style:{width:"100%",padding:"10px 12px",borderRadius:8,border:"1px solid #334155",background:"#0f172a",color:"#f1f5f9",fontSize:13,outline:"none",resize:"vertical",fontFamily:"inherit"}})
+          ),
+
+          e("button",{onClick:()=>setModal(null),style:{width:"100%",padding:"14px",borderRadius:12,border:"none",background:"#3b82f6",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer"}},"閉じる")
+        )
+      );
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // レンダー
+  // ═══════════════════════════════════════════════════════════
+  const unwashedCount = washCounts["未洗車"];
+  const maintCount = maintCars.length;
+  const tabs = [
+    {id:"home",    icon:"🏠",label:"TOP"},
+    {id:"spots",   icon:"🅿️",label:"駐車場"},
+    {id:"maint",   icon:"🔧",label:"メンテ",badge:maintCount},
+    {id:"wash",    icon:"🚿",label:"洗車",badge:unwashedCount},
+    {id:"settings",icon:"⚙️",label:"設定"},
+  ];
+
+  return e("div",{style:{maxWidth:480,margin:"0 auto",minHeight:"100vh",background:"#0f172a",paddingBottom:72}},
+    header,
+    e("div",{style:{padding:"12px 14px"}},
+      tab==="home" && homeTab,
+      tab==="spots" && spotsTab,
+      tab==="maint" && maintTab,
+      tab==="wash" && washTab,
+      tab==="settings" && settingsTab
+    ),
+
+    // Bottom Nav
+    e("div",{style:{position:"fixed",bottom:0,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,background:"rgba(15,23,42,0.97)",backdropFilter:"blur(10px)",WebkitBackdropFilter:"blur(10px)",borderTop:"1px solid #334155",display:"flex",padding:"6px 0 env(safe-area-inset-bottom, 8px)",zIndex:100}},
+      tabs.map(t=>
+        e("button",{key:t.id,onClick:()=>setTab(t.id),style:{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:1,background:"none",border:"none",cursor:"pointer",padding:"4px 0",color:tab===t.id?"#3b82f6":"#64748b",position:"relative"}},
+          e("span",{style:{fontSize:16}},t.icon),
+          e("span",{style:{fontSize:8,fontWeight:600}},t.label),
+          t.badge>0 && e("span",{style:{position:"absolute",top:0,right:"calc(50% - 18px)",background:"#ef4444",color:"#fff",fontSize:8,fontWeight:700,borderRadius:10,padding:"1px 5px",minWidth:16,textAlign:"center"}},t.badge)
+        )
+      )
+    ),
+
+    // Modal
+    modalEl
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(e(App));
+</script>
+</body>
+</html>
