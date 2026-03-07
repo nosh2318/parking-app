@@ -30,7 +30,7 @@ const { useState, useMemo, useCallback, useEffect, useRef } = React;
 // ═══════════════════════════════════════════════════════════
 const SUPABASE_URL = "https://rkrvjpipvpybkmqadmrb.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcnZqcGlwdnB5YmttcWFkbXJiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI4MjI4MjQsImV4cCI6MjA4ODM5ODgyNH0.Jq_yIfAp1gsXdOtigwEwMb43iPD188PRKKdwc0D4tU4";
-const supabase = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
+const sbClient = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
 
 // ═══════════════════════════════════════════════════════════
 // localStorage 永続化（オフラインフォールバック）
@@ -49,9 +49,9 @@ function saveState(data){
 
 // Supabase からデータ読み込み
 async function loadFromSupabase(){
-  if(!supabase) return null;
+  if(!sbClient) return null;
   try{
-    const {data,error} = await supabase.from("parking_state").select("data").eq("id",1).single();
+    const {data,error} = await sbClient.from("parking_state").select("data").eq("id",1).single();
     if(error||!data||!data.data||Object.keys(data.data).length===0) return null;
     return data.data;
   }catch(e){return null}
@@ -60,11 +60,11 @@ async function loadFromSupabase(){
 // Supabase にデータ保存
 let saveTimer = null;
 function saveToSupabase(stateData){
-  if(!supabase) return;
+  if(!sbClient) return;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async()=>{
     try{
-      await supabase.from("parking_state").update({data:stateData,updated_at:new Date().toISOString()}).eq("id",1);
+      await sbClient.from("parking_state").update({data:stateData,updated_at:new Date().toISOString()}).eq("id",1);
     }catch(e){console.log("Supabase save error",e)}
   }, 500); // 500msデバウンス
 }
@@ -149,7 +149,7 @@ function App(){
         if(remote.history)setHistory(remote.history);
         setSyncStatus("online");
       }else{
-        setSyncStatus(supabase?"online":"offline");
+        setSyncStatus(sbClient?"online":"offline");
       }
     });
     return()=>{mounted=false};
@@ -157,8 +157,8 @@ function App(){
 
   // Supabase リアルタイム購読（他のユーザーの変更を受信）
   useEffect(()=>{
-    if(!supabase)return;
-    const channel=supabase.channel("parking-realtime").on(
+    if(!sbClient)return;
+    const channel=sbClient.channel("parking-realtime").on(
       "postgres_changes",
       {event:"UPDATE",schema:"public",table:"parking_state",filter:"id=eq.1"},
       (payload)=>{
@@ -175,7 +175,7 @@ function App(){
         setTimeout(()=>{isRemoteUpdate.current=false},100);
       }
     ).subscribe();
-    return()=>{supabase.removeChannel(channel)};
+    return()=>{sbClient.removeChannel(channel)};
   },[]);
 
   // localStorage + Supabase に自動保存
@@ -289,7 +289,7 @@ function App(){
     setHistory([]);
     localStorage.removeItem(STORAGE_KEY);
     // Supabaseもリセット
-    if(supabase){supabase.from("parking_state").update({data:{},updated_at:new Date().toISOString()}).eq("id",1).then(()=>{});}
+    if(sbClient){sbClient.from("parking_state").update({data:{},updated_at:new Date().toISOString()}).eq("id",1).then(()=>{});}
     alert("データを初期化しました。");
   };
 
