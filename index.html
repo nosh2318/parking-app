@@ -93,6 +93,8 @@ function App(){
   const [spots, setSpots] = useState(s0?s0.spots:INITIAL_SPOTS);
   const [tab, setTab] = useState("home");
   const [selectedCar, setSelectedCar] = useState(null);
+  const [parkStep, setParkStep] = useState("select"); // "select" → "confirm" → "done"
+  const [doneInfo, setDoneInfo] = useState(null); // {car, spot} 完了表示用
   const [history, setHistory] = useState(s0?s0.history:[]);
   const [modal, setModal] = useState(null);
   const [washMap, setWashMap] = useState(s0?s0.washMap:initWash);
@@ -337,40 +339,61 @@ function App(){
           e("button",{onClick:()=>setTab("spots"),style:{marginTop:14,padding:"12px 28px",borderRadius:10,border:"1px solid #ef4444",background:"transparent",color:"#fca5a5",fontSize:13,fontWeight:700,cursor:"pointer"}},"🅿️ 駐車場タブで出庫する")
         )
       : e("div",{style:{background:"#1e293b",borderRadius:14,padding:16,border:"1px solid #334155",marginBottom:14}},
-          e("div",{style:{fontSize:14,fontWeight:800,marginBottom:10}},"🚗 入庫する車両を選択"),
-          parkableCars.length>0
-            ? e(React.Fragment,null,
-                e("select",{value:selectedCar||"",onChange:ev=>setSelectedCar(ev.target.value||null),style:{width:"100%",padding:"14px 12px",borderRadius:10,border:"2px solid #3b82f6",background:"#0f172a",color:"#f1f5f9",fontSize:15,fontWeight:600,outline:"none",marginBottom:12}},
-                  e("option",{value:""},"-- 車両を選んでください --"),
-                  parkableCars.map(c=>e("option",{key:c.id,value:c.id},carLabel(c)))
-                ),
-                // 選択後：入庫先を1つだけ提案
-                selectedCar && carStatus(selectedCar).type==="out" && (()=>{
-                  const avail = spots.filter(s=>!s.carId && canParkInSpot(s,selectedCar));
-                  if(avail.length===0) return e("div",{style:{padding:14,borderRadius:10,background:"#7f1d1d44",border:"1px solid #ef444444",textAlign:"center",fontSize:13,color:"#fca5a5"}},
-                    "この車両を入庫できる空き枠がありません（専用枠の制限）"
-                  );
-                  // 専用枠を優先、なければ通常枠の先頭を提案
-                  const recommended = avail.find(s=>s.restricted) || avail[0];
-                  return e("div",{style:{background:"linear-gradient(135deg,#065f4622,#0f172a)",borderRadius:14,border:"2px solid #10b981",padding:20}},
-                    e("div",{style:{textAlign:"center",marginBottom:14}},
-                      e("div",{style:{fontSize:40,marginBottom:4}},"📍"),
-                      e("div",{style:{fontSize:14,color:"#6ee7b7",fontWeight:700,marginBottom:8}},"こちらに駐車してください"),
-                      e("div",{style:{fontSize:42,fontWeight:900,color:"#fff",lineHeight:1.2}},"No."+recommended.no),
-                      e("div",{style:{fontSize:16,color:"#94a3b8",marginTop:8}},"キーナンバー: "+recommended.key),
-                      recommended.restricted && e("div",{style:{fontSize:11,color:"#a78bfa",marginTop:6}},"📌 専用枠")
-                    ),
-                    e("button",{onClick:()=>{parkCar(recommended.id,selectedCar);setSelectedCar(null)},style:{width:"100%",padding:"16px",borderRadius:12,border:"none",cursor:"pointer",fontSize:16,fontWeight:800,background:"#10b981",color:"#fff"}},"✅ 入庫完了")
-                  );
-                })(),
-                // 選択中の車両が既に駐車中やメンテ中なら注記
-                selectedCar && carStatus(selectedCar).type!=="out" && e("div",{style:{padding:12,borderRadius:10,background:"#1e3a5f44",border:"1px solid #3b82f644",fontSize:12,color:"#93c5fd",textAlign:"center"}},
-                  carStatus(selectedCar).type==="parked"?"この車両は既に駐車場 No."+carStatus(selectedCar).spot.no+" に駐車中です":"この車両はメンテナンス中です"
+
+          // ── STEP 3: 完了 ──
+          parkStep==="done" && doneInfo && e("div",{style:{textAlign:"center"}},
+            e("div",{style:{fontSize:48,marginBottom:8}},"✅"),
+            e("div",{style:{fontSize:18,fontWeight:900,color:"#6ee7b7",marginBottom:6}},"入庫完了"),
+            e("div",{style:{fontSize:14,color:"#f1f5f9",marginBottom:4}},carLabel(doneInfo.car)),
+            e("div",{style:{fontSize:14,color:"#94a3b8",marginBottom:16}},"No."+doneInfo.spot.no+" (Key:"+doneInfo.spot.key+") に入庫しました"),
+            e("button",{onClick:()=>{setParkStep("select");setSelectedCar(null);setDoneInfo(null)},style:{padding:"12px 32px",borderRadius:10,border:"none",cursor:"pointer",fontSize:14,fontWeight:700,background:"#3b82f6",color:"#fff"}},"OK")
+          ),
+
+          // ── STEP 2: 確認 ──
+          parkStep==="confirm" && selectedCar && (()=>{
+            const car=getCar(selectedCar);
+            const avail=spots.filter(s=>!s.carId && canParkInSpot(s,selectedCar));
+            if(avail.length===0) return e("div",{style:{textAlign:"center"}},
+              e("div",{style:{padding:14,borderRadius:10,background:"#7f1d1d44",border:"1px solid #ef444444",fontSize:13,color:"#fca5a5",marginBottom:12}},"この車両を入庫できる空き枠がありません（専用枠の制限）"),
+              e("button",{onClick:()=>{setParkStep("select");setSelectedCar(null)},style:{padding:"10px 24px",borderRadius:10,border:"1px solid #334155",background:"transparent",color:"#94a3b8",fontSize:13,fontWeight:600,cursor:"pointer"}},"戻る")
+            );
+            const recommended=avail.find(s=>s.restricted)||avail[0];
+            return e("div",null,
+              e("div",{style:{background:"linear-gradient(135deg,#065f4622,#0f172a)",borderRadius:14,border:"2px solid #10b981",padding:20,marginBottom:12}},
+                e("div",{style:{textAlign:"center"}},
+                  e("div",{style:{fontSize:40,marginBottom:4}},"📍"),
+                  e("div",{style:{fontSize:14,color:"#6ee7b7",fontWeight:700,marginBottom:8}},"こちらに駐車してください"),
+                  e("div",{style:{fontSize:42,fontWeight:900,color:"#fff",lineHeight:1.2}},"No."+recommended.no),
+                  e("div",{style:{fontSize:16,color:"#94a3b8",marginTop:8}},"キーナンバー: "+recommended.key),
+                  recommended.restricted && e("div",{style:{fontSize:11,color:"#a78bfa",marginTop:6}},"📌 専用枠")
                 )
+              ),
+              e("div",{style:{background:"#0f172a",borderRadius:12,padding:14,marginBottom:14,textAlign:"center"}},
+                e("div",{style:{fontSize:14,fontWeight:700,color:"#f1f5f9",marginBottom:4}},carLabel(car)+" を"),
+                e("div",{style:{fontSize:15,fontWeight:800,color:"#6ee7b7"}},"No."+recommended.no+" に入庫しますか？")
+              ),
+              e("div",{style:{display:"flex",gap:10}},
+                e("button",{onClick:()=>{setParkStep("select")},style:{flex:1,padding:"14px",borderRadius:12,border:"1px solid #334155",background:"transparent",color:"#94a3b8",fontSize:14,fontWeight:600,cursor:"pointer"}},"戻る"),
+                e("button",{onClick:()=>{parkCar(recommended.id,selectedCar);setDoneInfo({car,spot:recommended});setParkStep("done")},style:{flex:1,padding:"14px",borderRadius:12,border:"none",cursor:"pointer",fontSize:15,fontWeight:800,background:"#10b981",color:"#fff"}},"はい")
               )
-            : e("div",{style:{padding:14,borderRadius:10,background:"#0f172a",border:"1px solid #334155",textAlign:"center",fontSize:13,color:"#475569"}},
-                outCars.length===0?"全車両が駐車場またはメンテ中です":"入庫可能な車両がありません"
-              )
+            );
+          })(),
+
+          // ── STEP 1: 車両選択 ──
+          parkStep==="select" && e(React.Fragment,null,
+            e("div",{style:{fontSize:14,fontWeight:800,marginBottom:10}},"🚗 入庫する車両を選択"),
+            parkableCars.length>0
+              ? e(React.Fragment,null,
+                  e("select",{value:selectedCar||"",onChange:ev=>{setSelectedCar(ev.target.value||null)},style:{width:"100%",padding:"14px 12px",borderRadius:10,border:"2px solid #3b82f6",background:"#0f172a",color:"#f1f5f9",fontSize:15,fontWeight:600,outline:"none",marginBottom:12}},
+                    e("option",{value:""},"-- 車両を選んでください --"),
+                    parkableCars.map(c=>e("option",{key:c.id,value:c.id},carLabel(c)))
+                  ),
+                  selectedCar && e("button",{onClick:()=>setParkStep("confirm"),style:{width:"100%",padding:"14px",borderRadius:12,border:"none",cursor:"pointer",fontSize:15,fontWeight:800,background:"#3b82f6",color:"#fff"}},"次へ →")
+                )
+              : e("div",{style:{padding:14,borderRadius:10,background:"#0f172a",border:"1px solid #334155",textAlign:"center",fontSize:13,color:"#475569"}},
+                  outCars.length===0?"全車両が駐車場またはメンテ中です":"入庫可能な車両がありません"
+                )
+          )
         ),
 
     // ── 駐車場の状況（全体）──
@@ -391,7 +414,7 @@ function App(){
           e("div",{style:{fontSize:10,color:"#64748b"}},"出庫中")
         )
       ),
-      // 各スポット一覧（コンパクト）
+      // 各スポット一覧（駐車中車両は編集ボタン付き）
       spots.map(sp=>{
         const car=sp.carId?getCar(sp.carId):null;
         return e("div",{key:sp.id,style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 10px",borderRadius:8,marginBottom:4,background:"#0f172a",border:"1px solid #334155",borderLeft:"3px solid "+(car?"#10b981":"#334155")}},
@@ -400,7 +423,10 @@ function App(){
             e("span",{style:{fontSize:10,color:"#64748b"}},"Key:"+sp.key)
           ),
           car
-            ? e("span",{style:{fontSize:12,fontWeight:700,color:"#10b981"}},carLabel(car))
+            ? e("div",{style:{display:"flex",alignItems:"center",gap:6}},
+                e("span",{style:{fontSize:12,fontWeight:700,color:"#10b981"}},carLabel(car)),
+                e("button",{onClick:()=>setModal({type:"moveSpot",spotId:sp.id,carId:sp.carId}),style:{padding:"3px 8px",borderRadius:6,border:"1px solid #3b82f644",background:"transparent",color:"#60a5fa",fontSize:9,fontWeight:600,cursor:"pointer"}},"変更")
+              )
             : e("span",{style:{fontSize:11,color:"#475569",fontStyle:"italic"}},"空き"+(sp.restricted?" 📌":""))
         );
       })
@@ -1015,6 +1041,52 @@ function App(){
             e("button",{onClick:()=>setModal(null),style:{flex:1,padding:"14px",borderRadius:12,border:"1px solid #334155",background:"transparent",color:"#94a3b8",fontSize:14,fontWeight:600,cursor:"pointer"}},"キャンセル"),
             e("button",{onClick:()=>{removeCar(modal.carId);setModal(null)},style:{flex:1,padding:"14px",borderRadius:12,border:"none",background:"#ef4444",color:"#fff",fontSize:14,fontWeight:700,cursor:"pointer"}},"削除する")
           )
+        )
+      );
+    }
+
+    // ── 駐車場所変更モーダル ──
+    if(modal.type==="moveSpot"){
+      const fromSpot = spots.find(s=>s.id===modal.spotId);
+      const car = getCar(modal.carId);
+      const freeSpots = spots.filter(s=>!s.carId && canParkInSpot(s,modal.carId));
+      modalEl = e("div",{onClick:ev=>{if(ev.target===ev.currentTarget)setModal(null)},style:overlay},
+        e("div",{className:"fade-in",style:{...sheet,position:"relative"}},
+          closeBtn,
+          e("div",{style:{fontSize:16,fontWeight:800,marginBottom:4}},"🔄 駐車場所の変更"),
+          e("div",{style:{fontSize:12,color:"#64748b",marginBottom:16}},car?carLabel(car)+" ・現在 No."+(fromSpot?fromSpot.no:""):""),
+
+          freeSpots.length>0
+            ? e(React.Fragment,null,
+                e("div",{style:{fontSize:12,color:"#94a3b8",marginBottom:10}},"移動先を選んでください:"),
+                freeSpots.map(sp2=>
+                  e("button",{key:sp2.id,onClick:()=>{
+                    // 現在のスポットを空にして、新しいスポットに入庫
+                    setSpots(p=>p.map(s=>{
+                      if(s.id===modal.spotId)return{...s,carId:null};
+                      if(s.id===sp2.id)return{...s,carId:modal.carId};
+                      return s;
+                    }));
+                    addLog("【移動】"+carLabel(car)+" No."+(fromSpot?fromSpot.no:"")+" → No."+sp2.no);
+                    setModal(null);
+                  },style:{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",padding:"14px 16px",borderRadius:12,border:"1px solid #334155",background:"#0f172a",color:"#f1f5f9",cursor:"pointer",fontSize:14,fontWeight:600,marginBottom:8}},
+                    e("div",{style:{display:"flex",alignItems:"center",gap:10}},
+                      e("div",{style:{width:44,height:40,borderRadius:8,background:"#065f4633",border:"2px solid #10b981",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center"}},
+                        e("div",{style:{fontSize:7,color:"#64748b",fontWeight:700}},"SPOT"),
+                        e("div",{style:{fontSize:14,fontWeight:800}},sp2.no)
+                      ),
+                      e("div",{style:{textAlign:"left"}},
+                        e("div",{style:{fontSize:12,color:"#64748b"}},"Key: "+sp2.key),
+                        sp2.restricted && e("div",{style:{fontSize:9,color:"#a78bfa"}},"📌 専用枠")
+                      )
+                    ),
+                    e("span",{style:{fontSize:12,color:"#10b981",fontWeight:700}},"ここに移動")
+                  )
+                )
+              )
+            : e("div",{style:{textAlign:"center",padding:20,color:"#fca5a5",fontSize:13}},"移動先の空き枠がありません"),
+
+          e("button",{onClick:()=>setModal(null),style:{width:"100%",marginTop:8,padding:"12px",borderRadius:10,border:"1px solid #334155",background:"transparent",color:"#94a3b8",fontSize:13,fontWeight:600,cursor:"pointer"}},"キャンセル")
         )
       );
     }
