@@ -20,7 +20,7 @@ select{-webkit-appearance:none;appearance:none;background:#0f172a url("data:imag
 <div id="root"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script>
 const e = React.createElement;
 const { useState, useMemo, useCallback, useEffect, useRef } = React;
@@ -30,7 +30,8 @@ const { useState, useMemo, useCallback, useEffect, useRef } = React;
 // ═══════════════════════════════════════════════════════════
 const SUPABASE_URL = "https://rkrvjpipvpybkmqadmrb.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcnZqcGlwdnB5YmttcWFkbXJiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI4MjI4MjQsImV4cCI6MjA4ODM5ODgyNH0.Jq_yIfAp1gsXdOtigwEwMb43iPD188PRKKdwc0D4tU4";
-const sbClient = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY) : null;
+var sbClient = null;
+try { if(window.supabase && window.supabase.createClient) sbClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY); } catch(err){ console.log("Supabase init skip",err); }
 
 // ═══════════════════════════════════════════════════════════
 // localStorage 永続化（オフラインフォールバック）
