@@ -1012,7 +1012,19 @@ function OPScreen({reservations,today,shifts,fleet,onFleetChange,onClose,vehicle
     (async()=>{
       if(SB_ENABLED){
         const dbTasks=await DB.fetchTasks(selDate);
-        if(dbTasks&&dbTasks.length>0){setTasks(dbTasks);return;}
+        if(dbTasks&&dbTasks.length>0){
+          // 予約データからオプション情報を同期
+          const rMap={};reservations.forEach(r=>{rMap[r.id]={b:!!r.optB,c:!!r.optC,j:!!r.optJ,usb:!!r.optUSB,parasol:!!r.optParasol};});
+          let changed=false;
+          const synced=dbTasks.map(t=>{
+            if(!t.reservationId||!rMap[t.reservationId])return t;
+            const ro=rMap[t.reservationId];
+            if(ro.b!==!!t.opts?.b||ro.c!==!!t.opts?.c||ro.j!==!!t.opts?.j||ro.usb!==!!t.opts?.usb||ro.parasol!==!!t.opts?.parasol){changed=true;return{...t,opts:ro};}
+            return t;
+          });
+          if(changed)DB.upsertTasks(synced,selDate);
+          setTasks(synced);return;
+        }
       }
       const gen=generateTasks(reservations,selDate,fleet,vehicles);
       setTasks(gen);
