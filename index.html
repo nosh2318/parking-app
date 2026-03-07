@@ -20,18 +20,26 @@ select{-webkit-appearance:none;appearance:none;background:#0f172a url("data:imag
 <div id="root"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script>
 const e = React.createElement;
 const { useState, useMemo, useCallback, useEffect, useRef } = React;
 
 // ═══════════════════════════════════════════════════════════
-// Supabase 設定
+// Supabase 設定（非同期読み込み）
 // ═══════════════════════════════════════════════════════════
 const SUPABASE_URL = "https://rkrvjpipvpybkmqadmrb.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJrcnZqcGlwdnB5YmttcWFkbXJiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI4MjI4MjQsImV4cCI6MjA4ODM5ODgyNH0.Jq_yIfAp1gsXdOtigwEwMb43iPD188PRKKdwc0D4tU4";
 var sbClient = null;
-try { if(window.supabase && window.supabase.createClient) sbClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY); } catch(err){ console.log("Supabase init skip",err); }
+var sbReady = new Promise(function(resolve){
+  var sc = document.createElement("script");
+  sc.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js";
+  sc.onload = function(){
+    try{ sbClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY); }catch(err){}
+    resolve(true);
+  };
+  sc.onerror = function(){ resolve(false); };
+  document.head.appendChild(sc);
+});
 
 // ═══════════════════════════════════════════════════════════
 // localStorage 永続化（オフラインフォールバック）
@@ -136,47 +144,45 @@ function App(){
   const [syncStatus, setSyncStatus] = useState("loading"); // "loading","online","offline"
   const isRemoteUpdate = useRef(false); // リモート更新中フラグ
 
-  // 初回: Supabase からデータ読み込み
+  // 初回: Supabase CDN読み込み完了後にデータ取得＆リアルタイム購読
   useEffect(()=>{
     let mounted=true;
-    loadFromSupabase().then(remote=>{
+    sbReady.then(()=>{
       if(!mounted)return;
-      if(remote&&remote.spots){
-        setSpots(remote.spots);
-        if(remote.cars)setCars(remote.cars);
-        if(remote.washMap)setWashMap(remote.washMap);
-        if(remote.washTimeMap)setWashTimeMap(remote.washTimeMap);
-        if(remote.maintMap)setMaintMap(remote.maintMap);
-        if(remote.history)setHistory(remote.history);
+      if(!sbClient){setSyncStatus("offline");return;}
+      // データ読み込み
+      loadFromSupabase().then(remote=>{
+        if(!mounted)return;
+        if(remote&&remote.spots){
+          setSpots(remote.spots);
+          if(remote.cars)setCars(remote.cars);
+          if(remote.washMap)setWashMap(remote.washMap);
+          if(remote.washTimeMap)setWashTimeMap(remote.washTimeMap);
+          if(remote.maintMap)setMaintMap(remote.maintMap);
+          if(remote.history)setHistory(remote.history);
+        }
         setSyncStatus("online");
-      }else{
-        setSyncStatus(sbClient?"online":"offline");
-      }
+      });
+      // リアルタイム購読
+      const channel=sbClient.channel("parking-realtime").on(
+        "postgres_changes",
+        {event:"UPDATE",schema:"public",table:"parking_state",filter:"id=eq.1"},
+        (payload)=>{
+          const d=payload.new&&payload.new.data;
+          if(!d||!d.spots)return;
+          isRemoteUpdate.current=true;
+          if(d.spots)setSpots(d.spots);
+          if(d.cars)setCars(d.cars);
+          if(d.washMap)setWashMap(d.washMap);
+          if(d.washTimeMap)setWashTimeMap(d.washTimeMap);
+          if(d.maintMap)setMaintMap(d.maintMap);
+          if(d.history)setHistory(d.history);
+          setSyncStatus("online");
+          setTimeout(()=>{isRemoteUpdate.current=false},100);
+        }
+      ).subscribe();
     });
     return()=>{mounted=false};
-  },[]);
-
-  // Supabase リアルタイム購読（他のユーザーの変更を受信）
-  useEffect(()=>{
-    if(!sbClient)return;
-    const channel=sbClient.channel("parking-realtime").on(
-      "postgres_changes",
-      {event:"UPDATE",schema:"public",table:"parking_state",filter:"id=eq.1"},
-      (payload)=>{
-        const d=payload.new&&payload.new.data;
-        if(!d||!d.spots)return;
-        isRemoteUpdate.current=true;
-        if(d.spots)setSpots(d.spots);
-        if(d.cars)setCars(d.cars);
-        if(d.washMap)setWashMap(d.washMap);
-        if(d.washTimeMap)setWashTimeMap(d.washTimeMap);
-        if(d.maintMap)setMaintMap(d.maintMap);
-        if(d.history)setHistory(d.history);
-        setSyncStatus("online");
-        setTimeout(()=>{isRemoteUpdate.current=false},100);
-      }
-    ).subscribe();
-    return()=>{sbClient.removeChannel(channel)};
   },[]);
 
   // localStorage + Supabase に自動保存
@@ -973,14 +979,9 @@ function App(){
           closeBtn,
           e("div",{style:{fontSize:16,fontWeight:800,marginBottom:14}},"🚙 出庫確認"),
 
-          // ガイド: やるべきこと
-          e("div",{style:{background:"#0f172a",borderRadius:14,padding:16,marginBottom:16}},
-            e("div",{style:{fontSize:12,color:"#94a3b8",marginBottom:10,fontWeight:700}},"📋 やること:"),
-            e("div",{style:{fontSize:13,lineHeight:2}},
-              e("div",null,"① キーボックス ",e("b",{style:{color:"#60a5fa"}},"Key:"+sp.key)," からキーを取る"),
-              e("div",null,"② 駐車場 ",e("b",{style:{color:"#60a5fa"}},"No."+sp.no)," の車両を出す"),
-              car && e("div",null,"③ 車両: ",e("b",{style:{color:"#f1f5f9"}},carLabel(car)))
-            )
+          e("div",{style:{background:"#0f172a",borderRadius:14,padding:16,marginBottom:16,textAlign:"center"}},
+            e("div",{style:{fontSize:14,color:"#f1f5f9",marginBottom:4}},car?carLabel(car):""),
+            e("div",{style:{fontSize:14,color:"#94a3b8"}},"No."+sp.no+" を出庫しますか？")
           ),
 
           e("div",{style:{display:"flex",gap:10}},
@@ -1242,8 +1243,8 @@ function App(){
   const unwashedCount = washCounts["未洗車"];
   const maintCount = maintCars.length;
   const tabs = [
-    {id:"home",    icon:"🏠",label:"TOP"},
-    {id:"spots",   icon:"🅿️",label:"駐車場"},
+    {id:"home",    icon:"🚗",label:"入庫"},
+    {id:"spots",   icon:"🅿️",label:"ステータス"},
     {id:"maint",   icon:"🔧",label:"メンテ",badge:maintCount},
     {id:"wash",    icon:"🚿",label:"洗車",badge:unwashedCount},
     {id:"settings",icon:"⚙️",label:"設定"},
