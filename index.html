@@ -1280,6 +1280,29 @@ function App(){
     // DB保存（非同期）
     DB.upsertReservations(imported).then(()=>dbLog("imp reservations",true,imported.length+"件")).catch(e=>dbLog("imp reservations",false,e.message));
     DB.upsertFleet(newFleet).catch(e=>dbLog("imp fleet",false,e.message));
+    // インポート後、既存タスクのオプション情報を強制更新
+    (async()=>{
+      const rOptsMap={};imported.forEach(r=>{rOptsMap[r.id]={b:!!r.optB,c:!!r.optC,j:!!r.optJ,usb:!!r.optUSB,parasol:!!r.optParasol};});
+      const affDates=new Set();
+      imported.forEach(r=>{
+        if(r.lendDate){affDates.add(r.lendDate);affDates.add(dOff(r.lendDate,-1));}
+        if(r.returnDate)affDates.add(r.returnDate);
+      });
+      for(const d of affDates){
+        try{
+          const ts=await DB.fetchTasks(d);
+          if(!ts||!ts.length)continue;
+          let ch=false;
+          const upd=ts.map(t=>{
+            const ro=rOptsMap[t.reservationId];if(!ro)return t;
+            const co=t.opts||{};
+            if(ro.b!==!!co.b||ro.c!==!!co.c||ro.j!==!!co.j||ro.usb!==!!co.usb||ro.parasol!==!!co.parasol){ch=true;return{...t,opts:{...ro}};}
+            return t;
+          });
+          if(ch)DB.upsertTasks(upd,d);
+        }catch(e){}
+      }
+    })();
   },[data,vehicles,fleet,pendingPlaces,maintenance]);
 
   const addReservation=useCallback((r,vehicleCode)=>{
