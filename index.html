@@ -986,13 +986,13 @@ function FleetTimeline({data,fleet,onFleetChange,today,maintenance,onMaintenance
       data.forEach(r=>{if(fleet[r.id]!==v.code)return;
         const ld=new Date(norm(r.lendDate)+"T00:00:00"),rd=new Date(norm(r.returnDate)+"T00:00:00");
         const s=ld>ms?ld:ms;const e=rd<me?rd:me;
-        for(let d=new Date(s);d<=e;d.setDate(d.getDate()+1)){usedDays.add(d.toISOString().slice(0,10));}
+        for(let d=new Date(s);d<=e;d.setDate(d.getDate()+1)){usedDays.add(toLD(d));}
       });
       // メンテナンスによる稼働日
       (maintenance||[]).forEach(mt=>{if(mt.vehicleCode!==v.code)return;
         const ld=new Date(norm(mt.startDate)+"T00:00:00"),rd=new Date(norm(mt.endDate)+"T00:00:00");
         const s=ld>ms?ld:ms;const e=rd<me?rd:me;
-        for(let d=new Date(s);d<=e;d.setDate(d.getDate()+1)){usedDays.add(d.toISOString().slice(0,10));}
+        for(let d=new Date(s);d<=e;d.setDate(d.getDate()+1)){usedDays.add(toLD(d));}
       });
       const days=usedDays.size;
       rates[v.code]={days,total:dim,pct:Math.min(Math.round(days/dim*100),100)};
